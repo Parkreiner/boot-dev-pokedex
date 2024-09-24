@@ -1,10 +1,16 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"strconv"
 )
+
+const pokedexLocationsEndpoint = "https://pokeapi.co/api/v2/location-area"
 
 type PokedexCommand struct {
 	command     string
@@ -12,11 +18,52 @@ type PokedexCommand struct {
 	operation   func() error
 }
 
+type PokemonLocation struct {
+	Name string `json:"name"`
+	Url  string `json:"url"`
+}
+
+type PokemonLocationResponse struct {
+	Count    int    `json:"count"`
+	Next     string `json:"next"`
+	Previous string `json:"previous"`
+
+	Results []struct {
+		Name string `json:"name"`
+		Url  string `json:"url"`
+	} `json:"results"`
+}
+
 func PokedexCommands() map[string]PokedexCommand {
+	const mapPageSize = 20
 	mapOffset := 0
+
 	exit := func() error {
 		os.Exit(0)
 		return nil
+	}
+
+	makeRequest := func() (PokemonLocationResponse, error) {
+		endpoint := pokedexLocationsEndpoint + "?offset=" + strconv.Itoa(mapOffset)
+
+		res, err := http.Get(endpoint)
+		if err != nil {
+			return PokemonLocationResponse{}, err
+		}
+		defer res.Body.Close()
+
+		body, err := io.ReadAll(res.Body)
+		if err != nil {
+			return PokemonLocationResponse{}, err
+		}
+
+		var pokeRes PokemonLocationResponse
+		err = json.Unmarshal(body, &pokeRes)
+		if err != nil {
+			return PokemonLocationResponse{}, err
+		}
+
+		return pokeRes, nil
 	}
 
 	var cmdMap map[string]PokedexCommand
@@ -25,6 +72,16 @@ func PokedexCommands() map[string]PokedexCommand {
 			command:     "map",
 			description: "List 20 regions. The next call to map will list the next 20 regions (or however many remain).",
 			operation: func() error {
+				res, err := makeRequest()
+				if err != nil {
+					return err
+				}
+
+				for _, r := range res.Results {
+					fmt.Println(r.Name)
+				}
+
+				mapOffset += mapPageSize
 				return nil
 			},
 		},
@@ -34,6 +91,16 @@ func PokedexCommands() map[string]PokedexCommand {
 			operation: func() error {
 				if mapOffset == 0 {
 					return errors.New("can't go back any further in map list")
+				}
+
+				mapOffset -= mapPageSize
+				res, err := makeRequest()
+				if err != nil {
+					return err
+				}
+
+				for _, r := range res.Results {
+					fmt.Println(r.Name)
 				}
 
 				return nil
