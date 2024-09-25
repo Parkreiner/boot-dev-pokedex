@@ -7,10 +7,9 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strconv"
 )
 
-const pokedexLocationsEndpoint = "https://pokeapi.co/api/v2/location-area"
+const pokedexLocationsEndpoint string = "https://pokeapi.co/api/v2/location-area"
 
 type PokedexCommand struct {
 	command     string
@@ -24,29 +23,41 @@ type PokemonLocation struct {
 }
 
 type PokemonLocationResponse struct {
-	Count    int    `json:"count"`
-	Next     string `json:"next"`
-	Previous string `json:"previous"`
+	Count   int     `json:"count"`
+	NextUrl *string `json:"next"`
+	PrevUrl *string `json:"previous"`
 
 	Results []struct {
-		Name string `json:"name"`
-		Url  string `json:"url"`
+		Name *string `json:"name"`
+		Url  *string `json:"url"`
 	} `json:"results"`
 }
 
 func PokedexCommands() map[string]PokedexCommand {
-	const mapPageSize = 20
-	mapOffset := 0
+	type PageConfig struct {
+		prevUrl *string
+		nextUrl *string
+	}
+
+	// Have to store initial nextUrl in a variable so that we can access the
+	// memory address, but don't want variable to be exposed beyond this initial
+	// setup step
+	var pageConfig PageConfig
+	{
+		startingUrl := pokedexLocationsEndpoint + "?offset=0"
+		pageConfig = PageConfig{
+			prevUrl: nil,
+			nextUrl: &startingUrl,
+		}
+	}
 
 	exit := func() error {
 		os.Exit(0)
 		return nil
 	}
 
-	makeRequest := func() (PokemonLocationResponse, error) {
-		endpoint := pokedexLocationsEndpoint + "?offset=" + strconv.Itoa(mapOffset)
-
-		res, err := http.Get(endpoint)
+	makeRequest := func(url *string) (PokemonLocationResponse, error) {
+		res, err := http.Get(*url)
 		if err != nil {
 			return PokemonLocationResponse{}, err
 		}
@@ -63,6 +74,8 @@ func PokedexCommands() map[string]PokedexCommand {
 			return PokemonLocationResponse{}, err
 		}
 
+		pageConfig.nextUrl = pokeRes.NextUrl
+		pageConfig.prevUrl = pokeRes.PrevUrl
 		return pokeRes, nil
 	}
 
@@ -72,16 +85,15 @@ func PokedexCommands() map[string]PokedexCommand {
 			command:     "map",
 			description: "List 20 regions. The next call to map will list the next 20 regions (or however many remain).",
 			operation: func() error {
-				res, err := makeRequest()
+				res, err := makeRequest(pageConfig.nextUrl)
 				if err != nil {
 					return err
 				}
 
 				for _, r := range res.Results {
-					fmt.Println(r.Name)
+					fmt.Println(*r.Name)
 				}
 
-				mapOffset += mapPageSize
 				return nil
 			},
 		},
@@ -89,18 +101,17 @@ func PokedexCommands() map[string]PokedexCommand {
 			command:     "mapb",
 			description: "List the previous 20 regions.",
 			operation: func() error {
-				if mapOffset == 0 {
+				if pageConfig.prevUrl == nil {
 					return errors.New("can't go back any further in map list")
 				}
 
-				mapOffset -= mapPageSize
-				res, err := makeRequest()
+				res, err := makeRequest(pageConfig.prevUrl)
 				if err != nil {
 					return err
 				}
 
 				for _, r := range res.Results {
-					fmt.Println(r.Name)
+					fmt.Println(*r.Name)
 				}
 
 				return nil
